@@ -1,5 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+type ArchivePayload = {
+  capture_id?: unknown;
+};
+
 type SupabaseError = {
   message?: string;
   details?: string | null;
@@ -18,6 +22,15 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   });
 }
 
+function asRequiredString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function safeSupabaseError(error: SupabaseError | null) {
   return {
     message: error?.message ?? null,
@@ -27,19 +40,8 @@ function safeSupabaseError(error: SupabaseError | null) {
   };
 }
 
-function parseLimit(req: Request): number {
-  const url = new URL(req.url);
-  const parsed = Number.parseInt(url.searchParams.get("limit") ?? "", 10);
-
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return 5;
-  }
-
-  return Math.min(parsed, 10);
-}
-
 Deno.serve(async (req: Request) => {
-  if (req.method !== "GET") {
+  if (req.method !== "POST") {
     return jsonResponse(
       { success: false, error: "method_not_allowed" },
       405,
@@ -62,6 +64,28 @@ Deno.serve(async (req: Request) => {
     );
   }
 
+  let payload: ArchivePayload;
+  try {
+    payload = await req.json();
+  } catch {
+    return jsonResponse(
+      { success: false, error: "invalid_json" },
+      400,
+    );
+  }
+
+  const captureId = asRequiredString(payload.capture_id);
+  if (!captureId) {
+    return jsonResponse(
+      {
+        success: false,
+        error: "missing_required_fields",
+        required_fields: ["capture_id"],
+      },
+      400,
+    );
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
@@ -72,7 +96,6 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  const limit = parseLimit(req);
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: {
       persistSession: false,
@@ -80,40 +103,38 @@ Deno.serve(async (req: Request) => {
     },
   });
 
-  const { data, error } = await supabase
+  const archivedAt = new Date().toISOString();
+  const { data: capture, error: updateError } = await supabase
     .from("captures")
-    .select(
-      [
-        "id",
-        "created_at",
-        "raw_content",
-        "source_device",
-        "source_channel",
-        "processed",
-        "archived_at",
-        "barry_note",
-        "recommended_action",
-      ].join(", "),
-    )
-    .is("archived_at", null)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    .update({
+      archived_at: archivedAt,
+    })
+    .eq("id", captureId)
+    .select("id, archived_at")
+    .maybeSingle();
 
-  if (error) {
+  if (updateError) {
     return jsonResponse(
       {
         success: false,
-        error: "captures_list_failed",
-        supabase_error: safeSupabaseError(error),
+        error: "capture_archive_failed",
+        supabase_error: safeSupabaseError(updateError),
       },
       500,
     );
   }
 
+  if (!capture) {
+    return jsonResponse(
+      { success: false, error: "capture_not_found", capture_id: captureId },
+      404,
+    );
+  }
+
   return jsonResponse({
     success: true,
-    count: data?.length ?? 0,
-    limit,
-    captures: data ?? [],
+    capture_id: capture.id,
+    status: "archived",
+    archived_at: capture.archived_at,
   });
 });

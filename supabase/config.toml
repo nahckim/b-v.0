@@ -2,3 +2,12 @@ project_id = "b-v-0"
 
 [functions.capture]
 verify_jwt = false
+
+[functions.list-captures]
+verify_jwt = false
+
+[functions.enrich-capture]
+verify_jwt = false
+
+[functions.archive-capture]
+verify_jwt = false

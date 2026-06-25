@@ -1,6 +1,6 @@
 # OOS2 Scriptable Review
 
-This is an iPhone review + one-tap enrich surface for the OOS2 minimal slice. It calls `list-captures`, displays the latest captures with Barry notes, and can call `enrich-capture` for a selected capture.
+This is an iPhone capture ledger for the OOS2 minimal slice. It calls `list-captures`, displays active captures newest-first, can enrich a selected capture, and can archive a handled capture from the active review queue.
 
 ## Install
 
@@ -24,25 +24,34 @@ The key is sent only as this request header:
 x-oos2-prototype-key
 ```
 
-The script does not display the key. It uses the key for listing captures and for one-tap enrichment.
+The script does not display the key. It uses the key for listing, enrichment, and archive requests.
 
 ## What It Shows
 
-The script opens a full-screen review page with the latest five captures from:
+The script opens a full-screen ledger page with the latest five active captures from:
 
 ```text
 https://sxvvyjwvecbqimmqieuv.functions.supabase.co/list-captures?limit=5
 ```
 
-Each capture shows:
+`list-captures` returns active captures only. A capture is active while `archived_at` is null.
+
+Each active capture row shows:
 
 - raw content
 - source device and source channel
-- processed status
-- Barry note
-- recommended action
 - creation time
+- status: `New` or `Enriched`
 - Enrich action
+- Archive action
+
+Barry note and recommended action are hidden behind row details when enrichment exists.
+
+## Lifecycle
+
+`processed` means the capture has been enriched. It does not mean the capture has been reviewed or handled.
+
+`archived_at` means the capture has been cleared from the active phone review list.
 
 Tapping `Enrich` reruns the Scriptable script with the selected capture ID, sends this payload to `enrich-capture`, and reloads the list:
 
@@ -52,7 +61,17 @@ Tapping `Enrich` reruns the Scriptable script with the selected capture ID, send
 }
 ```
 
-On success, the page shows an `Enriched` notice above the refreshed list.
+On success, the page shows an `Enriched` notice above the refreshed active list.
+
+Tapping `Archive` reruns the Scriptable script with the selected capture ID, sends this payload to `archive-capture`, and reloads the list:
+
+```json
+{
+  "capture_id": "selected-capture-id"
+}
+```
+
+On success, the page shows an `Archived` notice and the capture no longer appears in the active list.
 
 ## Reset Key Manually
 
@@ -72,4 +91,7 @@ Run it once, then run `OOS2 Review Captures` again. It will prompt for the new k
 4. Confirm the latest capture appears.
 5. Tap `Enrich` on the capture.
 6. Confirm the page reloads with an `Enriched` notice.
-7. Confirm the capture now shows `Processed`, a Barry note, and a recommended action.
+7. Confirm the capture now shows `Enriched` and its details include a Barry note and recommended action.
+8. Tap `Archive` on the capture.
+9. Confirm the page reloads with an `Archived` notice.
+10. Confirm the archived capture no longer appears in the active list.

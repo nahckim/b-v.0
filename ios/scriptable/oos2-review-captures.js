@@ -2,6 +2,8 @@ const LIST_CAPTURES_URL =
   "https://sxvvyjwvecbqimmqieuv.functions.supabase.co/list-captures?limit=5";
 const ENRICH_CAPTURE_URL =
   "https://sxvvyjwvecbqimmqieuv.functions.supabase.co/enrich-capture";
+const ARCHIVE_CAPTURE_URL =
+  "https://sxvvyjwvecbqimmqieuv.functions.supabase.co/archive-capture";
 const PROTOTYPE_HEADER = "x-oos2-prototype-key";
 const KEYCHAIN_KEY = "OOS2_PROTOTYPE_KEY";
 
@@ -35,10 +37,12 @@ async function getPrototypeKey() {
 }
 
 async function loadCaptures(prototypeKey) {
-  const request = new Request(LIST_CAPTURES_URL);
+  const request = new Request(urlWithCacheBuster(LIST_CAPTURES_URL));
   request.method = "GET";
   request.headers = {
     [PROTOTYPE_HEADER]: prototypeKey,
+    "cache-control": "no-cache",
+    pragma: "no-cache",
   };
   request.timeoutInterval = 20;
 
@@ -156,6 +160,65 @@ async function enrichCapture(prototypeKey, captureId) {
   };
 }
 
+async function archiveCapture(prototypeKey, captureId) {
+  const request = new Request(ARCHIVE_CAPTURE_URL);
+  request.method = "POST";
+  request.headers = {
+    [PROTOTYPE_HEADER]: prototypeKey,
+    "content-type": "application/json",
+  };
+  request.body = JSON.stringify({
+    capture_id: captureId,
+  });
+  request.timeoutInterval = 20;
+
+  let responseText;
+  try {
+    responseText = await request.loadString();
+  } catch (error) {
+    return {
+      ok: false,
+      title: "Archive request failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const statusCode = request.response?.statusCode ?? 0;
+  let body = null;
+  try {
+    body = JSON.parse(responseText);
+  } catch {
+    return {
+      ok: false,
+      title: "Unexpected archive response",
+      message: `HTTP ${statusCode}: ${responseText}`,
+    };
+  }
+
+  if (statusCode === 401) {
+    return {
+      ok: false,
+      title: "Unauthorized",
+      message: "The stored prototype key was rejected. Reset the Scriptable Keychain value and run again.",
+    };
+  }
+
+  if (statusCode < 200 || statusCode >= 300 || body.success !== true) {
+    return {
+      ok: false,
+      title: "Archive request failed",
+      message: `HTTP ${statusCode}: ${JSON.stringify(body)}`,
+    };
+  }
+
+  return {
+    ok: true,
+    title: "Archived",
+    message: "Capture cleared from active review.",
+    body,
+  };
+}
+
 function getQueryParameters() {
   if (
     typeof args !== "undefined" &&
@@ -175,13 +238,26 @@ function optionalString(value) {
 }
 
 function currentScriptUrl(params) {
-  const query = Object.entries(params)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join("&");
   const baseUrl = URLScheme.forRunningScript();
-  const separator = baseUrl.includes("?") ? "&" : "?";
+  const [path, queryString = ""] = baseUrl.split("?");
+  const currentParams = queryString
+    .split("&")
+    .filter(Boolean)
+    .filter((param) => {
+      const key = decodeURIComponent(param.split("=")[0] || "");
+      return key !== "action" && key !== "capture_id";
+    });
+  const nextParams = Object.entries(params)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+  const query = currentParams.concat(nextParams).join("&");
 
-  return `${baseUrl}${separator}${query}`;
+  return query ? `${path}?${query}` : path;
+}
+
+function urlWithCacheBuster(url) {
+  const separator = url.includes("?") ? "&" : "?";
+
+  return `${url}${separator}_=${Date.now()}`;
 }
 
 function escapeHtml(value) {
@@ -212,37 +288,55 @@ function formatDate(value) {
 }
 
 function renderCapture(capture) {
-  const processed = capture.processed ? "Processed" : "Needs review";
-  const barryNote = capture.barry_note || "No Barry note yet.";
-  const recommendedAction = capture.recommended_action || "No recommended action yet.";
+  const status = capture.processed ? "Enriched" : "New";
+  const statusClass = capture.processed ? "status-enriched" : "status-new";
+  const barryNote = optionalString(capture.barry_note) || "No Barry note yet.";
+  const recommendedAction = optionalString(capture.recommended_action) || "No recommended action yet.";
   const sourceDevice = capture.source_device || "unknown device";
   const sourceChannel = capture.source_channel || "unknown channel";
   const captureId = optionalString(capture.id);
-  const enrichAction = captureId
+  const details = capture.processed || optionalString(capture.barry_note) || optionalString(capture.recommended_action)
+    ? `
+      <details class="capture-details">
+        <summary>Details</summary>
+        <div class="detail-block">
+          <div class="detail-label">Barry</div>
+          <p>${escapeHtml(barryNote)}</p>
+        </div>
+        <div class="detail-block">
+          <div class="detail-label">Next</div>
+          <p>${escapeHtml(recommendedAction)}</p>
+        </div>
+      </details>
+    `
+    : "";
+  const actions = captureId
     ? `
       <div class="capture-actions">
-        <a class="enrich-link" href="${escapeHtml(currentScriptUrl({
+        <a class="action-link" href="${escapeHtml(currentScriptUrl({
           action: "enrich",
           capture_id: captureId,
         }))}">Enrich</a>
+        <a class="action-link action-archive" href="${escapeHtml(currentScriptUrl({
+          action: "archive",
+          capture_id: captureId,
+        }))}">Archive</a>
       </div>
     `
     : "";
 
   return `
     <article class="capture">
-      <div class="capture-meta">
-        <span>${escapeHtml(formatDate(capture.created_at))}</span>
-        <span>${escapeHtml(sourceDevice)} / ${escapeHtml(sourceChannel)}</span>
-        <span class="${capture.processed ? "status-done" : "status-open"}">${escapeHtml(processed)}</span>
+      <div class="capture-header">
+        <div class="capture-meta">
+          <span>${escapeHtml(formatDate(capture.created_at))}</span>
+          <span>${escapeHtml(sourceDevice)} / ${escapeHtml(sourceChannel)}</span>
+        </div>
+        <span class="${statusClass}">${escapeHtml(status)}</span>
       </div>
-      <div class="section-label">Captured</div>
       <p class="raw">${escapeHtml(capture.raw_content || "")}</p>
-      <div class="section-label">Barry</div>
-      <p>${escapeHtml(barryNote)}</p>
-      <div class="section-label">Next</div>
-      <p>${escapeHtml(recommendedAction)}</p>
-      ${enrichAction}
+      ${details}
+      ${actions}
     </article>
   `;
 }
@@ -285,11 +379,11 @@ function pageShell(title, body, notice = null) {
           }
 
           header {
-            margin-bottom: 18px;
+            margin-bottom: 16px;
           }
 
           h1 {
-            font-size: 28px;
+            font-size: 24px;
             line-height: 1.15;
             margin: 0 0 6px;
           }
@@ -300,66 +394,99 @@ function pageShell(title, body, notice = null) {
           }
 
           .capture {
-            border: 1px solid color-mix(in srgb, CanvasText 16%, Canvas 84%);
-            border-radius: 8px;
-            padding: 14px;
-            margin: 0 0 12px;
+            border-bottom: 1px solid color-mix(in srgb, CanvasText 16%, Canvas 84%);
+            padding: 12px 0;
+          }
+
+          .capture:first-of-type {
+            border-top: 1px solid color-mix(in srgb, CanvasText 16%, Canvas 84%);
+          }
+
+          .capture-header {
+            align-items: flex-start;
+            display: flex;
+            gap: 10px;
+            justify-content: space-between;
+            margin-bottom: 6px;
           }
 
           .capture-meta {
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 6px 8px;
             align-items: center;
             color: color-mix(in srgb, CanvasText 62%, Canvas 38%);
             font-size: 12px;
-            margin-bottom: 12px;
           }
 
           .capture-actions {
-            margin-top: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
           }
 
-          .enrich-link {
+          .action-link {
             align-items: center;
             border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas 82%);
             border-radius: 8px;
             color: CanvasText;
             display: inline-flex;
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 700;
-            min-height: 36px;
-            padding: 0 12px;
+            min-height: 34px;
+            padding: 0 11px;
             text-decoration: none;
           }
 
-          .status-done,
-          .status-open {
-            border-radius: 999px;
-            padding: 2px 8px;
+          .action-archive {
+            color: color-mix(in srgb, CanvasText 72%, Canvas 28%);
           }
 
-          .status-done {
+          .status-enriched,
+          .status-new {
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 2px 8px;
+            white-space: nowrap;
+          }
+
+          .status-enriched {
             background: color-mix(in srgb, #1f9d55 18%, Canvas 82%);
             color: color-mix(in srgb, #1f9d55 82%, CanvasText 18%);
           }
 
-          .status-open {
+          .status-new {
             background: color-mix(in srgb, #b45309 18%, Canvas 82%);
             color: color-mix(in srgb, #b45309 82%, CanvasText 18%);
           }
 
-          .section-label {
+          .capture-details {
+            margin-top: 8px;
+          }
+
+          .capture-details summary {
+            color: color-mix(in srgb, CanvasText 62%, Canvas 38%);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 700;
+          }
+
+          .detail-block {
+            margin-top: 8px;
+          }
+
+          .detail-label {
             color: color-mix(in srgb, CanvasText 58%, Canvas 42%);
             font-size: 11px;
             font-weight: 700;
             letter-spacing: 0;
-            margin-top: 12px;
             text-transform: uppercase;
           }
 
           p {
-            font-size: 16px;
+            font-size: 15px;
             line-height: 1.42;
             margin: 4px 0 0;
           }
@@ -399,6 +526,7 @@ function pageShell(title, body, notice = null) {
             margin-bottom: 3px;
           }
 
+
           .error-title {
             font-weight: 700;
             margin-bottom: 6px;
@@ -409,7 +537,7 @@ function pageShell(title, body, notice = null) {
         <main>
           <header>
             <h1>${escapeHtml(title)}</h1>
-            <div class="subtle">Latest OOS2 captures and Barry notes</div>
+            <div class="subtle">Active captures, newest first</div>
           </header>
           ${renderNotice(notice)}
           ${body}
@@ -423,7 +551,7 @@ function renderCaptures(result, notice = null) {
   if (result.captures.length === 0) {
     return pageShell(
       "OOS2 Review",
-      '<div class="empty">No captures returned yet.</div>',
+      '<div class="empty">No active captures.</div>',
       notice,
     );
   }
@@ -431,6 +559,24 @@ function renderCaptures(result, notice = null) {
   const body = result.captures.map(renderCapture).join("");
   return pageShell("OOS2 Review", body, notice);
 }
+
+
+function withoutCaptureId(captures, captureId) {
+  if (!captureId) {
+    return captures;
+  }
+
+  return captures.filter((capture) => optionalString(capture.id) !== captureId);
+}
+
+function withCaptures(result, captures) {
+  return {
+    ...result,
+    count: captures.length,
+    captures,
+  };
+}
+
 
 function renderError(title, message, notice = null) {
   return pageShell(
@@ -457,6 +603,7 @@ try {
   const action = optionalString(queryParameters.action);
   const captureId = optionalString(queryParameters.capture_id);
   let notice = null;
+  let archivedCaptureId = null;
 
   if (action === "enrich") {
     if (!captureId) {
@@ -473,6 +620,24 @@ try {
         message: enrichResult.message,
       };
     }
+  } else if (action === "archive") {
+    if (!captureId) {
+      notice = {
+        kind: "error",
+        title: "Archive skipped",
+        message: "No capture ID was provided.",
+      };
+    } else {
+      const archiveResult = await archiveCapture(prototypeKey, captureId);
+      if (archiveResult.ok) {
+        archivedCaptureId = captureId;
+      }
+      notice = {
+        kind: archiveResult.ok ? "success" : "error",
+        title: archiveResult.title,
+        message: archiveResult.message,
+      };
+    }
   }
 
   const result = await loadCaptures(prototypeKey);
@@ -480,7 +645,9 @@ try {
   if (!result.ok) {
     await showHtml(renderError(result.title, result.message, notice));
   } else {
-    await showHtml(renderCaptures(result, notice));
+    const renderedCaptures = withoutCaptureId(result.captures, archivedCaptureId);
+    const renderResult = withCaptures(result, renderedCaptures);
+    await showHtml(renderCaptures(renderResult, notice));
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
