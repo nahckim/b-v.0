@@ -1,6 +1,6 @@
 # OOS2 Scriptable Review
 
-This is a read-only iPhone review surface for the OOS2 minimal slice. It calls `list-captures` and displays the latest captures with Barry notes.
+This is an iPhone review + one-tap enrich surface for the OOS2 minimal slice. It calls `list-captures`, displays the latest captures with Barry notes, and can call `enrich-capture` for a selected capture.
 
 ## Install
 
@@ -24,11 +24,11 @@ The key is sent only as this request header:
 x-oos2-prototype-key
 ```
 
-The script does not display the key and does not write to Supabase.
+The script does not display the key. It uses the key for listing captures and for one-tap enrichment.
 
 ## What It Shows
 
-The script opens a full-screen read-only review page with the latest five captures from:
+The script opens a full-screen review page with the latest five captures from:
 
 ```text
 https://sxvvyjwvecbqimmqieuv.functions.supabase.co/list-captures?limit=5
@@ -42,6 +42,17 @@ Each capture shows:
 - Barry note
 - recommended action
 - creation time
+- Enrich action
+
+Tapping `Enrich` reruns the Scriptable script with the selected capture ID, sends this payload to `enrich-capture`, and reloads the list:
+
+```json
+{
+  "capture_id": "selected-capture-id"
+}
+```
+
+On success, the page shows an `Enriched` notice above the refreshed list.
 
 ## Reset Key Manually
 
@@ -56,7 +67,9 @@ Run it once, then run `OOS2 Review Captures` again. It will prompt for the new k
 ## Expected Test Path
 
 1. Capture something from iPhone using the existing Shortcut.
-2. Enrich the capture if needed.
-3. Open Scriptable.
-4. Run `OOS2 Review Captures`.
-5. Confirm the latest capture appears with its Barry note and recommended action.
+2. Open Scriptable.
+3. Run `OOS2 Review Captures`.
+4. Confirm the latest capture appears.
+5. Tap `Enrich` on the capture.
+6. Confirm the page reloads with an `Enriched` notice.
+7. Confirm the capture now shows `Processed`, a Barry note, and a recommended action.
