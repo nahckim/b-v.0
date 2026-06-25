@@ -1,0 +1,4 @@
+project_id = "b-v-0"
+
+[functions.capture]
+verify_jwt = false
